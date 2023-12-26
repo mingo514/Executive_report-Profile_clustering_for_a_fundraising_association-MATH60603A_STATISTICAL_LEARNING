@@ -1,0 +1,267 @@
+### Beyond Online Presence - Exploring the Role of Digital Interactions in Donor Behavior
+
+In the rapidly evolving digital landscape, understanding the impact of online engagement on charitable donations has become increasingly important for our non-profit organizations. This report aims to shed light on how digital interactions through emails and social networks influence donor profile, behavior and contributions. Our analysis focuses on a comprehensive dataset that combines individual donor information with their online engagement activities. By exploring this relationship, we aim to provide valuable insights into how digital strategies can be optimized to enhance donor participation and increase funding for vital causes. In doing so, this report seeks to offer actionable recommendations for leveraging online platforms to strengthen donor relationships and maximize the effectiveness of fundraising campaigns.
+
+*This report will not dive into the methodology of this analysis as it is an executive report. For more details or questions, please refer to the data science team.*
+
+The following analysis is based on a dataset consisting of a combination of several database avalaible in the organisation internal network concerning our 1 000 000 members. The dataset encompasses several critical attributes, which can be broadly categorized into three groups. Demographic Information : This includes data points such as age, gender, education level, salary range, and area of residence. This information helps in understanding the donor base's demographic diversity. Donation History: The dataset details each donor's total and average donation amounts, and the count of donations made during the year 2022. This historical donation data is crucial for analyzing giving patterns and trends. Online Engagement during year 2021 : Metrics such as email interactions, social media likes and shares, total social engagements, and overall online presence are included. These measures provide insights on each donor's level of online activity and engagement with our organization's digital platforms.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(caret)
+library(MASS)
+
+library(mgcv)
+
+library(cluster)
+library(rpart)
+
+```
+
+```{r data_loading, include=FALSE}
+donation_history <- read.csv('DonationHistory.csv')
+list_contacted_2022 <- read.csv('ListContacted2022.csv')
+newsletter_read <- read.csv('NewsletterRead.csv')
+big5_questionnaire <- read.csv('Sample-Big5Questionnaire.csv')
+social_network_usage <- read.csv('SocialNetworkUsage.csv')
+members_list <- read.csv('MembersList.csv')
+```
+
+```{r quick_exploration, include=FALSE}
+head(donation_history)
+summary(donation_history)
+nrow(donation_history)
+
+head(list_contacted_2022)
+summary(list_contacted_2022)
+nrow(list_contacted_2022)
+
+head(newsletter_read)
+summary(newsletter_read)
+nrow(newsletter_read)
+
+head(social_network_usage)
+summary(social_network_usage)
+nrow(social_network_usage)
+
+head(members_list)
+summary(members_list)
+nrow(members_list)
+```
+
+```{r data_merge, include=FALSE}
+donation_history$Amount[is.na(donation_history$Amount)]=0
+donation_summary <- donation_history %>%
+  group_by(ID) %>%
+  summarise(
+    Total_Donation = sum(Amount, na.rm = TRUE),
+    Average_Donation = mean(Amount, na.rm = TRUE),
+    Donation_Count = n(),
+    Last_Donation_Year = max(Yr)
+  )
+merged_data_1 <- left_join(members_list, donation_summary, by = "ID")
+
+merged_data_3 <- left_join(merged_data_1, newsletter_read, by = "email")
+
+merged_data_4 <- left_join(merged_data_3, social_network_usage, by = "email")
+merged_data_4 <- dplyr::select(merged_data_4, -Name)
+
+
+# A enlever
+head(merged_data_4, 500)
+summary(merged_data_4)
+```
+
+```{r feature_enginering, include=FALSE}
+
+
+
+merged_data_4$YearsSinceJoining <- 2022 - merged_data_4$Joined
+
+
+merged_data_4$TotalInteractions <- rowSums(merged_data_4[, c("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")], na.rm = TRUE)
+merged_data_4$AverageMonthlyInteractions <- merged_data_4$TotalInteractions / 12
+
+
+
+merged_data_4$Education=factor(merged_data_4$Education)
+merged_data_4$City=factor(merged_data_4$City)
+City_one_hot_encoded <- model.matrix(~ City - 1, data = merged_data_4)
+City_one_hot_encoded_df <- as.data.frame(City_one_hot_encoded)
+merged_data_4 <- cbind(merged_data_4, City_one_hot_encoded_df)
+
+Education_one_hot_encoded <- model.matrix(~ Education - 1, data = merged_data_4)
+Education_one_hot_encoded_df <- as.data.frame(Education_one_hot_encoded)
+merged_data_4 <- cbind(merged_data_4, Education_one_hot_encoded_df)
+names(merged_data_4) <- gsub(' ', '', names(merged_data_4))
+names(merged_data_4) <- gsub('/', '', names(merged_data_4))
+
+
+
+merged_data_4$Total_Donation[is.na(merged_data_4$Total_Donation)]=0
+
+merged_data_4$Average_Donation[is.na(merged_data_4$Average_Donation)]=0
+merged_data_4$Donation_Count[is.na(merged_data_4$Donation_Count)]=0
+
+merged_data_4$Last_Donation_Year[is.na(merged_data_4$Last_Donation_Year)]=0
+merged_data_4$Last_Donation_Year = factor(merged_data_4$Last_Donation_Year)
+
+merged_data_4$Shares[is.na(merged_data_4$Shares)]=0
+
+merged_data_4$Likes[is.na(merged_data_4$Likes)]=0
+
+merged_data_4$Supporter[is.na(merged_data_4$Supporter)]=FALSE
+
+merged_data_4$Salary <- cut(
+  merged_data_4$Salary,
+  breaks = c(0, 80000, 150000, 250000), 
+  labels = c("0_80", "80_150", "150_250"), 
+  include.lowest = TRUE
+)
+merged_data_4$Salary = factor(merged_data_4$Salary)
+
+Salary_one_hot_encoded <- model.matrix(~ Salary - 1, data = merged_data_4)
+
+Salary_one_hot_encoded_df <- as.data.frame(Salary_one_hot_encoded)
+
+merged_data_4 <- cbind(merged_data_4, Salary_one_hot_encoded_df)
+
+merged_data_4$Age <- cut(
+  merged_data_4$Age,
+  breaks = c(0, 35, 55, 90), 
+  labels = c("0_35", "35_55", "55_90"), 
+  include.lowest = TRUE
+)
+
+merged_data_4$Age = factor(merged_data_4$Age)
+age_one_hot_encoded <- model.matrix(~ Age - 1, data = merged_data_4)
+
+age_one_hot_encoded_df <- as.data.frame(age_one_hot_encoded)
+
+merged_data_4 <- cbind(merged_data_4, age_one_hot_encoded_df)
+
+merged_data_4$TotalSocialEngagement <- merged_data_4$Shares + merged_data_4$Likes
+
+merged_data_4$Online_Presence <- ifelse(merged_data_4$Likes > 0 | merged_data_4$Shares > 0 | merged_data_4$Supporter == TRUE, 1, 0)
+
+merged_data_4$Supporter <- ifelse(merged_data_4$Supporter==TRUE, 1, 0) 
+
+
+head(merged_data_4)
+summary(merged_data_4)
+
+
+
+merged_data_4_sample = head(merged_data_4, 30000)
+write.csv(merged_data_4_sample, file = "merged_data.csv")
+
+head(merged_data_4)
+
+data <- subset(merged_data_4,select =  -c(ID, LastName, FirstName, email, Jan, Feb, Mar, Apr, May, Jun, Jul, Aug, Sep, Oct, Nov, Dec, Last_Donation_Year, Education, City, Salary, Age, Joined, AverageMonthlyInteractions, TotalSocialEngagement))
+summary(data)
+```
+
+#### Cluster Analysis, Types of donor profiles and impact of Online presence on donations
+
+In this section, we present the results of a cluster analysis conducted to understand the patterns of online engagement and donation behavior among our donor base. The aim was to segment donors into distinct groups based on their online activities (including email and social network interactions) and donation histories. This segmentation helps in identifying unique characteristics and preferences of different donor groups, enabling more targeted and effective engagement strategies. Here is what we found :
+
+Before diving into any cluster. We just wanted to mention that the clusters are equally distributed in term of sex (roughly 50/50) and in term of years since joining (approximately 2016 for each group).
+
+**Cluster 1 - The Humble Helper (25% of the total members)** : This group is predominantly composed of two age groups either young people or old people, which 91% of it only having a High School degree. Mostly coming from Urban and Suburban area, the vast majority of the group has a salary under 80k/year. Donation-wise, this cluster falls into the category of medium donors, averaging \$20 per donation and maintaining a donation frequency comparable to other groups. With an average total donation of \$33 per person, they contribute reliably, albeit in modest amounts. Their online presence is modest, with an engagement level that reflects an interest in the organization's activities through likes and shares, albeit at a moderate level. The lack of followership on the page could indicate a potential area for growth in digital engagement strategies. Additionally, the average newsletter opening rate of 1.3 times a year points to a baseline of interest that could be nurtured into more substantial interaction with the right approach.They represent an essential segment of the donor base, demonstrating consistent, though average, support both financially and digitally.
+
+**Cluster 2 - The Prosperous Intellectual Contributor (25% of the total members)**: This group is predominantly from Urban and Suburban area, with the large majority (90%) of this cluster having a University education level. In term of salary, this group is equally shared between medium (80 to 150k) and high salaries (150 to 250k), while more than the half being between 35 and 55 years old.The total donation amount/person is the second highest at approximately \$47, paired with an average donation amount of about \$27. This suggests that this cluster consists of donors who contribute significantly to the organization. This group shows moderate online engagement with an average of around 2 likes and 0.2 shares per year and per person, which is not notable compared to other clusters. The support metric is at zero, which imply that these individuals are not following the page. The Total newsletter interactions are in the medium trench of the clusters with in average 2 opening of the newsletters in a year. This indicates that while they do interact, they are not the most active in terms of monthly engagements. Given this profile, They can be described as high-standard-of-living donors who are moderately engaged online, but contribute significantly to the donations.
+
+**Cluster 3 - The Early-Stage Professionals (33% of the total members)** : They are characterized by a youthful dynamism, with almost half of the group being under 35 years While 100% of it having a University or college degree, they are in the early stages of their careers, as reflected in their salaries, which are all below \$80,000 per year. Residing in urban areas, they share this common trait with other clusters, pointing to a concentrated demographic in city environments.This cluster's giving habits position them as middle-tier donors. They average \$21 per donation, and their donation count is on par with other groups, indicating a consistent pattern of giving. Their total average donation per person is \$36, showing a steady, if not substantial, financial support to the organization.They exhibit a moderate level of online activity. Their interactions with the organization's content---measured by likes and shares---mirror the engagement of other clusters, suggesting an almost uniform approach to digital participation across the donor base. The absence of page followership highlights an opportunity to engage these young, educated donors more deeply via online channels. With an average newsletter opening rate of twice a year, there is evident interest that could be further cultivated with strategic communication efforts.They are a promising group of educated young professionals who consistently contribute to the organization and exhibit a fair level of digital engagement. There is untapped potential in this cluster, especially considering their early career stage and medium level of online activity. As they progress in their careers and potentially increase their earning capacity, there is an opportunity for the organization to foster this group's growth into more active participants and higher-level donors.
+
+**Cluster 4 - The Offline Passive Countryman (15% of the total members)** : They represent a demographic that is evenly spread across various age groups, with the majority earning below \$80,000, reflecting a modest income bracket. Educational attainment within this cluster is split between high school diplomas and university degrees, suggesting a diverse range of skills and knowledge bases. Uniquely, all members of this cluster reside in rural areas, indicating a potential for community-centric values and perspectives. As donors, they are the most modest contributors in the dataset, with an average individual donation of \$19 and a total average donation amount of \$12. Their donation frequency is also the lowest, with less than half a donation per person annually, suggesting financial caution or limited resources for charitable giving. In alignment with their donation patterns, this group's digital footprint is the least pronounced among all clusters. Their online engagement, measured by likes and shares, is minimal, and the absence of followership on the organization's page, along with the lowest rate of newsletter interaction, underscores a significant opportunity to enhance digital connectivity and communication.They are characterized by their presence in rural communities and a tendency toward minimal financial contributions and digital engagement. These patterns may reflect the economic realities of rural living and the challenges of connecting with traditional online campaigns.
+
+**Cluster 5 - The Devoted Believers (1% of the total members)** : this is a cluster marked by a balanced age distribution, with a significant portion (70%) holding high-level degrees and a similar percentage earning under \$80k/year. They predominantly inhabit urban areas, encompassing city, suburban, and downtown locations, which may contribute to their heightened digital savviness and engagement. This group stands out significantly in their financial generosity, leading the pack with the highest average total donations per person at \$158 and an impressive average donation amount of \$51. Their donation frequency is also notable, with an average of 2.8 donations per person made in 2022. These figures highlight their strong financial commitment to the causes they support. In terms of online presence, they are unparalleled, demonstrating exceptional engagement. Their interaction with online content is highly active, evidenced by an average of 68 likes and 7 shares per person, far surpassing other groups. Additionally, a whopping 95% of this group follows the organization's page, indicating a deep level of commitment and interest. Their engagement with newsletters is also noteworthy, opening them nearly 7 times on average in 2021.They represent a dynamic and highly engaged segment of donors, combining financial generosity with a strong online presence. Their significant involvement in both monetary support and digital interaction suggests a deeply integrated relationship with the organization.
+
+This analysis underscores the importance of digital engagement and social profile in shaping donor behavior. By understanding the distinct characteristics of each donor cluster, the organization can develop more nuanced and effective strategies to enhance donor participation, build stronger relationships, and increase the impact of their fundraising efforts.
+
+```{r kmeans, include=FALSE}
+
+
+
+normalized_data <- scale(data)
+summary(normalized_data)
+
+kmeans_result <- kmeans(normalized_data, centers = 5)
+
+kmeans_result$centers
+
+
+means <- apply(data, 2, mean, na.rm = TRUE)
+sds <- apply(data, 2, sd, na.rm = TRUE)
+
+original_centers <- sweep(sweep(kmeans_result$centers, 2, sds, "*"), 2, means, "+")
+
+
+original_scaled_data <- sweep(sweep(normalized_data, 2, sds, "*"), 2, means, "+")
+
+original_data_with_clusters <- cbind(data, cluster = kmeans_result$cluster)
+
+original_centers
+```
+
+```{r kmeans_results, echo=FALSE}
+cluster_sizes <- table(kmeans_result$cluster)
+cluster_sizes = data.frame(cluster_sizes)
+
+
+
+```
+
+```{r, echo=FALSE}
+
+colors <- c("#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf")
+
+online_presence_counts <- c(248284, 251598, 337170, 152551, 10397)
+categories <- c("1. Humble Helpers", "2. The Prosperous Intellectual Contributors", "3. The Early-Stage Professionals", "4. Offline Passive Countryman", "5. Devoted Believers")
+
+percentages <- round(online_presence_counts / sum(online_presence_counts) * 100, 2)
+
+labels <- paste(online_presence_counts, " (", percentages, "%", ")", sep = "")
+
+pie(online_presence_counts,
+    labels = labels,
+    main = "Online Presence Repartition",
+    col = colors)
+
+legend("bottom", legend = categories, fill = colors, xpd = TRUE, inset = c(-0.1, -0.32))
+
+
+```
+
+```{r, include=FALSE}
+
+
+model <- lm(Total_Donation ~ .-Donation_Count-Average_Donation, data = data)
+summary(model)
+
+model2 <- lm(Total_Donation ~ Online_Presence + Supporter + Likes + Shares, data = data)
+summary(model2)
+
+```
+
+#### Insights and Recommendations
+
+In our strategic approach to enhance donor relationships and maximize potential contributions, we will focus on three key clusters: "The Devoted Believers," "The Prosperous Intellectual Contributors," and "The Early-Stage Professionals." These groups have been identified as having the most potential for growth and engagement due to their unique characteristics and contribution patterns. For "The Devoted Believers" the goal is to potentially inspire them to increase their support and become advocates for the organization, spreading their enthusiasm and commitment to others. For "The Early-Stage Profrssionals", the goal is support their growth into committed, higher-level donors as they advance in their careers. For "The Prosperous Intellectual Contributors", the goal is to increase their donation amount as the ratio donation/salary is the lowest of all clusters. To effectively cater to their needs and preferences, we have developed a comprehensive strategy that encompasses three main pillars: Customized Communication Based on Profile, Recognition Programs, and Exclusive Advantages for High Donators. Each of these pillars is tailored to resonate with the specific traits and expectations of our targeted clusters.
+
+1.  **Customized Communication Based on Profile**:
+
+    -   **The Devoted Believers**: Implement a communication strategy that emphasizes digital engagement, reflecting their high online activity and financial generosity. Use personalized email campaigns, social media interactions, and exclusive digital content that aligns with their demonstrated interests and digital savviness.
+
+    -   **The Prosperous Intellectual Contributors**: Focus on intellectually stimulating content and high-quality, thought-provoking discussions. Utilize newsletters, exclusive online forums, and personalized messages that cater to their educational background and high standard of living.
+
+    -   **The Early-Stage Professionals**: Craft messages that resonate with their career stage and aspirations. This could involve content about career advancement, work-life balance, and social impact. Utilize platforms they are likely to engage with, like LinkedIn, for career-focused content or Instagram for more visually engaging storytelling.
+
+2.  **Recognition plan for high donation amount**: Develop a specialized recognition program that highlights the exceptional engagement and financial contributions of high-value donors. Feature their stories on various platforms, offer personalized acknowledgments, and consider exclusive badges or titles that denote their high level of involvement. Recognize their significant financial contributions through exclusive listings in annual reports and on the website. Offer opportunities for them to be featured in donor spotlights or special interviews.Acknowledge their consistent support and potential for growth. Implement recognition strategies like featuring their contributions in newsletters, providing shout-outs on social media, and offering certificates or awards for their involvement in special projects or events.
+
+3.  **Believers' Loyalty Program**: This measure will implement a Monthly donation program that will offer exclusives advantages to its members. Offer them unique advantages such as early access to the organization's reports, a yearly exclusive webinar with the CEO or key figures, and a special newsletter tailored for this circle. Provide a 'digital badge' or recognition on their social media profiles, showcasing their status as a committed monthly donor. Also provide them with exclusive content such as in-depth analyses, research findings, or insights into future projects and plans. Offer them a chance to participate in exclusive round-table discussions or Q&A sessions with experts and leaders relevant to their intellectual interests. Offer a tiered recognition system where their commitment is acknowledged at different levels, providing more benefits as their duration of monthly donations increases.
+
+By implementing these strategies, we aim to deepen our engagement with these key donor clusters, aligning our approaches with their unique characteristics and preferences to foster stronger, more meaningful relationships.
